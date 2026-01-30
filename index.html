@@ -1,0 +1,268 @@
+# Timer
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>実績表示・時間割タイマー</title>
+    <style>
+        body { font-family: sans-serif; max-width: 750px; margin: 0 auto; padding: 20px; background-color: #f0f2f5; color: #333; }
+        .control-panel { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .input-group { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 15px; }
+        .input-item { display: flex; flex-direction: column; }
+        .input-item label { font-size: 0.8em; color: #666; margin-bottom: 4px; }
+        input, select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 8px 15px; cursor: pointer; border: none; border-radius: 4px; font-weight: bold; }
+        .btn-add { background-color: #007bff; color: white; }
+        .btn-break { background-color: #17a2b8; color: white; }
+        .btn-start { background-color: #28a745; color: white; width: 100%; font-size: 1.2em; padding: 12px; margin-top: 10px; }
+        .btn-pause { background-color: #ffc107; color: black; }
+        .btn-next { background-color: #6f42c1; color: white; margin-left: 10px; }
+        .btn-delete { background-color: #ff4d4d; color: white; padding: 2px 8px; font-size: 0.8em; }
+        .btn-move { background-color: #6c757d; color: white; padding: 2px 8px; font-size: 0.8em; margin: 0 2px; }
+
+        .record-box { background: #2c3e50; color: #fff; padding: 15px; border-radius: 8px; text-align: center; margin-bottom: 20px; font-size: 1.1em; }
+        .record-box span { font-family: monospace; font-size: 1.5em; color: #42b983; }
+
+        .section { margin-top: 20px; padding: 15px; border-radius: 8px; background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .section-title { font-weight: bold; border-bottom: 2px solid #ddd; margin-bottom: 10px; padding-bottom: 5px; }
+        .active-area { border: 3px solid #28a745; background: #f8fff9; }
+        .upcoming-area { border: 1px solid #ccc; }
+        .finished-area { opacity: 0.8; background: #e9ecef; }
+
+        .item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; }
+        .badge { font-size: 0.7em; padding: 2px 5px; border-radius: 3px; margin-right: 5px; color: white; }
+        .badge-timer { background: #007bff; }
+        .badge-counter { background: #6f42c1; }
+        .timer-text { font-family: monospace; font-size: 1.4em; font-weight: bold; }
+        .result-text { font-size: 0.9em; color: #d63384; font-weight: bold; }
+        .move-controls { display: inline-flex; gap: 2px; margin-right: 10px; }
+    </style>
+</head>
+<body>
+
+    <div class="record-box">
+        🔥 総勉強時間（休憩除く）: <span id="actual-study-time">00:00:00</span>
+    </div>
+
+    <div class="control-panel">
+        <div class="input-group">
+            <div class="input-item" style="flex: 2;">
+                <label>内容</label>
+                <input type="text" id="name" placeholder="例: 数学、過去問">
+            </div>
+            <div class="input-item">
+                <label>モード</label>
+                <select id="mode">
+                    <option value="timer">タイマー</option>
+                    <option value="counter">カウンター</option>
+                </select>
+            </div>
+            <div class="input-item"><label>時</label><input type="number" id="h" value="0" style="width:40px"></div>
+            <div class="input-item"><label>分</label><input type="number" id="m" value="20" style="width:40px"></div>
+            <div class="input-item"><label>秒</label><input type="number" id="s" value="0" style="width:40px"></div>
+            <button class="btn-add" onclick="addItem('study')">追加</button>
+        </div>
+        <div class="input-group" style="background: #f8f9fa; padding: 10px; border-radius: 6px;">
+            <span>☕ 休憩(タイマー):</span>
+            <input type="number" id="break-m" value="5" style="width:50px"> 分
+            <button class="btn-break" onclick="addItem('break')">追加</button>
+        </div>
+        <button id="start-btn" class="btn-start" onclick="toggleTimer()">▶ スタート</button>
+    </div>
+
+    <div class="section active-area">
+        <div class="section-title">🔥 実行中</div>
+        <div id="list-active"></div>
+    </div>
+    <div class="section upcoming-area">
+        <div class="section-title">📅 次の予定</div>
+        <div id="list-upcoming"></div>
+    </div>
+    <div class="section finished-area">
+        <div class="section-title">✅ 完了済み（実績時間）</div>
+        <div id="list-finished"></div>
+    </div>
+
+    <script>
+        let schedule = [];
+        let currentIndex = 0;
+        let timer = null;
+        let isRunning = false;
+        let audioCtx = null;
+        let actualStudySeconds = 0;
+        let lastTimestamp = null; // バックグラウンド復帰時の計算用
+
+        function addItem(type) {
+            const nameField = document.getElementById('name');
+            const mode = document.getElementById('mode').value;
+            let name = nameField.value || (type === 'break' ? "☕ 休憩" : "学習タスク");
+            
+            let totalSec = 0;
+            if (mode === 'timer' || type === 'break') {
+                const h = parseInt(document.getElementById('h').value) || 0;
+                const m = (type === 'break') ? parseInt(document.getElementById('break-m').value) : (parseInt(document.getElementById('m').value) || 0);
+                const s = (type === 'break') ? 0 : (parseInt(document.getElementById('s').value) || 0);
+                totalSec = (h * 3600) + (m * 60) + s;
+            }
+
+            schedule.push({ 
+                name, 
+                current: (mode === 'counter' && type !== 'break') ? 0 : totalSec, 
+                original: totalSec, 
+                type: type,
+                mode: (type === 'break') ? 'timer' : mode,
+                spent: 0 
+            });
+            nameField.value = "";
+            render();
+        }
+
+        function formatTime(sec) {
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            const s = sec % 60;
+            return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+        }
+
+        function render() {
+            const f = document.getElementById('list-finished');
+            const a = document.getElementById('list-active');
+            const u = document.getElementById('list-upcoming');
+            f.innerHTML = ""; a.innerHTML = ""; u.innerHTML = "";
+
+            schedule.forEach((item, i) => {
+                const div = document.createElement('div');
+                div.className = `item`;
+                const badge = `<span class="badge ${item.mode === 'timer' ? 'badge-timer' : 'badge-counter'}">${item.mode === 'timer' ? 'T' : 'C'}</span>`;
+                
+                if (i < currentIndex) {
+                    div.innerHTML = `<span>${badge}${item.name}</span>
+                                     <span class="result-text">実績: ${formatTime(item.spent)}</span>`;
+                    f.appendChild(div);
+                } else if (i === currentIndex && isRunning) {
+                    const nextBtn = `<button class="btn-next" onclick="forceNext()">完了</button>`;
+                    div.innerHTML = `<span>${badge}${item.name}</span>
+                                     <div><span class="timer-text">${formatTime(item.current)}</span>${nextBtn}</div>`;
+                    a.appendChild(div);
+                } else {
+                    const deleteBtn = !isRunning ? `<button class="btn-delete" onclick="deleteItem(${i})">×</button>` : "";
+                    
+                    // 並べ替えボタンの生成
+                    let moveBtns = "";
+                    if (!isRunning) {
+                        moveBtns = `
+                            <div class="move-controls">
+                                <button class="btn-move" onclick="moveItem(${i}, -1)">↑</button>
+                                <button class="btn-move" onclick="moveItem(${i}, 1)">↓</button>
+                            </div>
+                        `;
+                    }
+
+                    div.innerHTML = `<span>${badge}${item.name}</span>
+                                     <div>${moveBtns}<span class="timer-text">${formatTime(item.current)}</span>${deleteBtn}</div>`;
+                    u.appendChild(div);
+                }
+            });
+            document.getElementById('actual-study-time').innerText = formatTime(actualStudySeconds);
+        }
+
+        function deleteItem(i) {
+            schedule.splice(i, 1);
+            if (i < currentIndex) currentIndex--;
+            render();
+        }
+
+        // 並べ替え関数
+        function moveItem(index, direction) {
+            const newIndex = index + direction;
+            if (newIndex >= currentIndex && newIndex < schedule.length) {
+                const temp = schedule[index];
+                schedule[index] = schedule[newIndex];
+                schedule[newIndex] = temp;
+                render();
+            }
+        }
+
+        function forceNext() {
+            playBeep();
+            currentIndex++;
+            checkEnd();
+            render();
+        }
+
+        function toggleTimer() {
+            const btn = document.getElementById('start-btn');
+            if (isRunning) {
+                clearInterval(timer);
+                isRunning = false;
+                lastTimestamp = null;
+                btn.innerText = "▶ 再開";
+                btn.className = "btn-start";
+            } else {
+                if (currentIndex >= schedule.length) return;
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                
+                isRunning = true;
+                lastTimestamp = Date.now();
+                btn.innerText = "⏸ 一時停止";
+                btn.className = "btn-start btn-pause";
+                timer = setInterval(tick, 1000);
+            }
+            render();
+        }
+
+        function tick() {
+            if (!isRunning || currentIndex >= schedule.length) return;
+
+            const now = Date.now();
+            const deltaSec = Math.floor((now - lastTimestamp) / 1000);
+
+            if (deltaSec >= 1) {
+                const item = schedule[currentIndex];
+                item.spent += deltaSec;
+                if (item.type === 'study') actualStudySeconds += deltaSec;
+
+                if (item.mode === 'timer') {
+                    item.current -= deltaSec;
+                    if (item.current <= 0) {
+                        item.current = 0;
+                        forceNext();
+                    }
+                } else {
+                    item.current += deltaSec;
+                }
+
+                lastTimestamp = now;
+                render();
+            }
+        }
+
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible" && isRunning) {
+                tick();
+            }
+        });
+
+        function checkEnd() {
+            if (currentIndex >= schedule.length) {
+                clearInterval(timer);
+                isRunning = false;
+                lastTimestamp = null;
+                alert("全てのタスクが終了しました！");
+                document.getElementById('start-btn').innerText = "▶ スタート";
+            }
+        }
+
+        function playBeep() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+        }
+    </script>
+</body>
+</html>
